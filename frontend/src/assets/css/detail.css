@@ -1,0 +1,29 @@
+.detail-content .table {
+  width: 80%;
+}
+
+.detail-content .table * {
+  font-size: 1em;
+}
+.detail-content .image img {
+  width: 100%;
+}
+.table-wrapper {
+  word-break: break-all;
+}
+.table-wrapper * {
+  word-break: break-all;
+  font-size: 1em;
+  padding-left: 7px;
+  text-align: left;
+}
+.detail-content p {
+  margin-bottom: 1em;
+}
+.emoji-picker-container {
+  width: 100% !important;
+}
+.emoji-vue-textarea {
+  width: 100% !important;
+  height: 30px !important;
+}

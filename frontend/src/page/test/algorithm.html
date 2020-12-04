@@ -1,0 +1,1282 @@
+<!DOCTYPE html>
+<meta charset="utf-8" />
+<head>
+  <script src="https://cdn.jsdelivr.net/npm/vue"></script>
+  <script src="https://d3js.org/d3.v5.min.js"></script>
+</head>
+<body>
+  <div id="app">
+    <dependency-graph :data="data"></dependency-graph>
+    <div style="padding-top: 10px; text-align: center;" @click="changeData()">
+      <button>Change Data</button>
+    </div>
+  </div>
+  <script>
+    Vue.config.devtools = true;
+    Vue.component("dependency-graph", {
+      template: `<div :style="{ width: width + 'px', height: height + 'px', border: '1px solid black' }">
+          <svg width="100%" height="100%">
+            <defs>
+              <pattern id="innerGrid" :width="innerGridSize" :height="innerGridSize" patternUnits="userSpaceOnUse">
+                <rect width="100%" height="100%" fill="none" stroke="#CCCCCC7A" stroke-width="0.5"/>
+              </pattern>
+              <pattern id="grid" :width="gridSize" :height="gridSize" patternUnits="userSpaceOnUse">
+                <rect width="100%" height="100%" fill="url(#innerGrid)" stroke="#CCCCCC7A" stroke-width="1.5"/>
+              </pattern>
+            </defs>
+          </svg>
+        </div>`,
+      props: ["data"],
+      data() {
+        return {
+          width: 1024,
+          height: 768,
+          gridSize: 100,
+          selections: {},
+          simulation: null,
+          forceProperties: {
+            center: {
+              x: 0.5,
+              y: 0.5,
+            },
+            charge: {
+              enabled: true,
+              strength: -700,
+              distanceMin: 1,
+              distanceMax: 2000,
+            },
+            collide: {
+              enabled: true,
+              strength: 0.7,
+              iterations: 1,
+              radius: 35,
+            },
+            forceX: {
+              enabled: true,
+              strength: 0.05,
+              x: 0.5,
+            },
+            forceY: {
+              enabled: true,
+              strength: 0.35,
+              y: 0.5,
+            },
+            link: {
+              enabled: true,
+              distance: 100,
+              iterations: 1,
+            },
+          },
+        };
+      },
+      computed: {
+        innerGridSize() {
+          return this.gridSize / 10;
+        },
+        nodes() {
+          return this.data.nodes;
+        },
+        links() {
+          return this.data.links;
+        },
+        // These are needed for captions
+        linkTypes() {
+          const linkTypes = [];
+          this.links.forEach((link) => {
+            if (linkTypes.indexOf(link.type) === -1) linkTypes.push(link.type);
+          });
+          return linkTypes.sort();
+        },
+        classes() {
+          const classes = [];
+          this.nodes.forEach((node) => {
+            if (classes.indexOf(node.class) === -1) classes.push(node.class);
+          });
+          return classes.sort();
+        },
+      },
+      created() {
+        // You can set the component width and height in any way
+        // you prefer. It's responsive! :)
+        this.width = window.innerWidth - 10;
+        this.height = window.innerHeight - 110;
+
+        this.simulation = d3
+          .forceSimulation()
+          .force("link", d3.forceLink())
+          .force("charge", d3.forceManyBody())
+          .force("collide", d3.forceCollide())
+          .force("center", d3.forceCenter())
+          .force("forceX", d3.forceX())
+          .force("forceY", d3.forceY())
+          .on("tick", this.tick);
+        // Call first time to setup default values
+        this.updateForces();
+      },
+      mounted() {
+        this.selections.svg = d3.select(this.$el.querySelector("svg"));
+        const svg = this.selections.svg;
+
+        // Define the arrow marker
+        svg
+          .append("svg:defs")
+          .selectAll("marker")
+          .data(["end"]) // Different link/path types can be defined here
+          .enter()
+          .append("svg:marker") // This section adds in the arrows
+          .attr("id", String)
+          .attr("viewBox", "0 -5 10 10")
+          .attr("refX", 43) // Prevents arrowhead from being covered by circle
+          .attr("refY", 0)
+          .attr("markerWidth", 6)
+          .attr("markerHeight", 6)
+          .attr("orient", "auto")
+          .append("svg:path")
+          .attr("d", "M0,-5L10,0L0,5");
+
+        // Define arrow for self-links
+        svg
+          .append("svg:defs")
+          .selectAll("marker")
+          .data(["end-self"])
+          .enter()
+          .append("svg:marker") // This section adds in the arrows
+          .attr("id", String)
+          .attr("viewBox", "0 -5 10 10")
+          .attr("refX", 40)
+          .attr("refY", -15)
+          .attr("markerWidth", 6)
+          .attr("markerHeight", 6)
+          .attr("orient", 285)
+          .append("svg:path")
+          .attr("d", "M0,-5L10,0L0,5");
+
+        // Add zoom and panning triggers
+        this.zoom = d3
+          .zoom()
+          .scaleExtent([1 / 4, 4])
+          .on("zoom", this.zoomed);
+        svg.call(this.zoom);
+
+        // A background grid to help user experience
+        // The width and height depends on the minimum scale extent and
+        // the + 10% and negative index to create an infinite grid feel
+        // The precedence of this element is important since you'll have
+        // click events on the elements above the grid
+        this.selections.grid = svg
+          .append("rect")
+          .attr("x", "-10%")
+          .attr("y", "-10%")
+          .attr("width", "410%")
+          .attr("height", "410%")
+          .attr("fill", "url(#grid)");
+
+        this.selections.graph = svg.append("g");
+        const graph = this.selections.graph;
+
+        // Node and link count is nice :)
+        this.selections.stats = svg
+          .append("text")
+          .attr("x", "1%")
+          .attr("y", "98%")
+          .attr("text-anchor", "left");
+
+        // Some caption
+        this.selections.caption = svg.append("g");
+        this.selections.caption
+          .append("rect")
+          .attr("width", "200")
+          .attr("height", "0")
+          .attr("rx", "10")
+          .attr("ry", "10")
+          .attr("class", "caption");
+      },
+      methods: {
+        tick() {
+          // If no data is passed to the Vue component, do nothing
+          if (!this.data) {
+            return;
+          }
+          const transform = (d) => {
+            return "translate(" + d.x + "," + d.y + ")";
+          };
+
+          const link = (d) => {
+            // Self-link support
+            if (d.source.index === d.target.index) {
+              return `M${d.source.x - 1},${d.source.y - 1}A30,30 -10,1,0 ${
+                d.target.x + 1
+              },${d.target.y + 1}`;
+            } else {
+              return (
+                "M" +
+                d.source.x +
+                "," +
+                d.source.y +
+                " L" +
+                d.target.x +
+                "," +
+                d.target.y
+              );
+            }
+          };
+
+          const graph = this.selections.graph;
+          graph.selectAll("path").attr("d", link);
+          graph.selectAll("circle").attr("transform", transform);
+          graph.selectAll("text").attr("transform", transform);
+
+          this.updateNodeLinkCount();
+        },
+        updateData() {
+          this.simulation.nodes(this.nodes);
+          this.simulation.force("link").links(this.links);
+
+          const simulation = this.simulation;
+          const graph = this.selections.graph;
+
+          // Links should only exit if not needed anymore
+          graph.selectAll("path").data(this.links).exit().remove();
+
+          graph
+            .selectAll("path")
+            .data(this.links)
+            .enter()
+            .append("path")
+            .attr("class", (d) => "link " + d.type);
+
+          // Nodes should always be redrawn to avoid lines above them
+          graph.selectAll("circle").remove();
+          graph
+            .selectAll("circle")
+            .data(this.nodes)
+            .enter()
+            .append("circle")
+            .attr("r", 30)
+            .attr("class", (d) => d.class)
+            .call(
+              d3
+                .drag()
+                .on("start", this.nodeDragStarted)
+                .on("drag", this.nodeDragged)
+                .on("end", this.nodeDragEnded)
+            )
+            .on("mouseover", this.nodeMouseOver)
+            .on("mouseout", this.nodeMouseOut)
+            .on("click", this.nodeClick);
+
+          graph.selectAll("text").remove();
+          graph
+            .selectAll("text")
+            .data(this.nodes)
+            .enter()
+            .append("text")
+            .attr("x", 0)
+            .attr("y", ".31em")
+            .attr("text-anchor", "middle")
+            .text((d) => d.name);
+
+          // Add 'marker-end' attribute to each path
+          const svg = d3.select(this.$el.querySelector("svg"));
+          svg
+            .selectAll("g")
+            .selectAll("path")
+            .attr("marker-end", (d) => {
+              // Caption items doesn't have source and target
+              if (d.source && d.target && d.source.index === d.target.index)
+                return "url(#end-self)";
+              else return "url(#end)";
+            });
+
+          // Update caption every time data changes
+          this.updateCaption();
+          simulation.alpha(1).restart();
+        },
+        updateForces() {
+          const { simulation, forceProperties, width, height } = this;
+          simulation
+            .force("center")
+            .x(width * forceProperties.center.x)
+            .y(height * forceProperties.center.y);
+          simulation
+            .force("charge")
+            .strength(
+              forceProperties.charge.strength * forceProperties.charge.enabled
+            )
+            .distanceMin(forceProperties.charge.distanceMin)
+            .distanceMax(forceProperties.charge.distanceMax);
+          simulation
+            .force("collide")
+            .strength(
+              forceProperties.collide.strength * forceProperties.collide.enabled
+            )
+            .radius(forceProperties.collide.radius)
+            .iterations(forceProperties.collide.iterations);
+          simulation
+            .force("forceX")
+            .strength(
+              forceProperties.forceX.strength * forceProperties.forceX.enabled
+            )
+            .x(width * forceProperties.forceX.x);
+          simulation
+            .force("forceY")
+            .strength(
+              forceProperties.forceY.strength * forceProperties.forceY.enabled
+            )
+            .y(height * forceProperties.forceY.y);
+          simulation
+            .force("link")
+            .distance(forceProperties.link.distance)
+            .iterations(forceProperties.link.iterations);
+
+          // updates ignored until this is run
+          // restarts the simulation (important if simulation has already slowed down)
+          simulation.alpha(1).restart();
+        },
+        updateNodeLinkCount() {
+          let nodeCount = this.nodes.length;
+          let linkCount = this.links.length;
+
+          const highlightedNodes = this.selections.graph.selectAll(
+            "circle.highlight"
+          );
+          const highlightedLinks = this.selections.graph.selectAll(
+            "path.highlight"
+          );
+          if (highlightedNodes.size() > 0 || highlightedLinks.size() > 0) {
+            nodeCount = highlightedNodes.size();
+            linkCount = highlightedLinks.size();
+          }
+          this.selections.stats.text(
+            "Nodes: " + nodeCount + " / Edges: " + linkCount
+          );
+        },
+        updateCaption() {
+          // WARNING: Some gross math will happen here!
+          const lineHeight = 30;
+          const lineMiddle = lineHeight / 2;
+          const captionXPadding = 28;
+          const captionYPadding = 5;
+
+          const caption = this.selections.caption;
+          caption
+            .select("rect")
+            .attr(
+              "height",
+              captionYPadding * 2 +
+                lineHeight * (this.classes.length + this.linkTypes.length)
+            );
+
+          const linkLine = (d) => {
+            const source = {
+              x: captionXPadding + 13,
+              y:
+                captionYPadding +
+                (lineMiddle + 1) +
+                lineHeight * this.linkTypes.indexOf(d),
+            };
+            const target = {
+              x: captionXPadding - 10,
+            };
+            return "M" + source.x + "," + source.y + "H" + target.x;
+          };
+
+          caption.selectAll("g").remove();
+          const linkCaption = caption.append("g");
+          linkCaption
+            .selectAll("path")
+            .data(this.linkTypes)
+            .enter()
+            .append("path")
+            .attr("d", linkLine)
+            .attr("class", (d) => "link " + d);
+
+          linkCaption
+            .selectAll("text")
+            .data(this.linkTypes)
+            .enter()
+            .append("text")
+            .attr("x", captionXPadding + 20)
+            .attr(
+              "y",
+              (d) =>
+                captionYPadding +
+                (lineMiddle + 5) +
+                lineHeight * this.linkTypes.indexOf(d)
+            )
+            .attr("class", "caption")
+            .text((d) => d);
+
+          const classCaption = caption.append("g");
+          classCaption
+            .selectAll("circle")
+            .data(this.classes)
+            .enter()
+            .append("circle")
+            .attr("r", 10)
+            .attr("cx", captionXPadding - 2)
+            .attr(
+              "cy",
+              (d) =>
+                captionYPadding +
+                lineMiddle +
+                lineHeight * (this.linkTypes.length + this.classes.indexOf(d))
+            )
+            .attr("class", (d) => d.toLowerCase());
+
+          classCaption
+            .selectAll("text")
+            .data(this.classes)
+            .enter()
+            .append("text")
+            .attr("x", captionXPadding + 20)
+            .attr(
+              "y",
+              (d) =>
+                captionYPadding +
+                (lineMiddle + 5) +
+                lineHeight * (this.linkTypes.length + this.classes.indexOf(d))
+            )
+            .attr("class", "caption")
+            .text((d) => d);
+
+          const captionWidth = caption.node().getBBox().width;
+          const captionHeight = caption.node().getBBox().height;
+          const paddingX = 18;
+          const paddingY = 12;
+          caption.attr(
+            "transform",
+            "translate(" +
+              (this.width - captionWidth - paddingX) +
+              ", " +
+              (this.height - captionHeight - paddingY) +
+              ")"
+          );
+        },
+        zoomed() {
+          const transform = d3.event.transform;
+          // The trick here is to move the grid in a way that the user doesn't perceive
+          // that the axis aren't really moving
+          // The actual movement is between 0 and gridSize only for x and y
+          const translate =
+            (transform.x % (this.gridSize * transform.k)) +
+            "," +
+            (transform.y % (this.gridSize * transform.k));
+          this.selections.grid.attr(
+            "transform",
+            "translate(" + translate + ") scale(" + transform.k + ")"
+          );
+          this.selections.graph.attr("transform", transform);
+
+          // Define some world boundaries based on the graph total size
+          // so we don't scroll indefinitely
+          const graphBox = this.selections.graph.node().getBBox();
+          const margin = 200;
+          const worldTopLeft = [graphBox.x - margin, graphBox.y - margin];
+          const worldBottomRight = [
+            graphBox.x + graphBox.width + margin,
+            graphBox.y + graphBox.height + margin,
+          ];
+          this.zoom.translateExtent([worldTopLeft, worldBottomRight]);
+        },
+        nodeDragStarted(d) {
+          if (!d3.event.active) {
+            this.simulation.alphaTarget(0.3).restart();
+          }
+          d.fx = d.x;
+          d.fy = d.y;
+        },
+        nodeDragged(d) {
+          d.fx = d3.event.x;
+          d.fy = d3.event.y;
+        },
+        nodeDragEnded(d) {
+          if (!d3.event.active) {
+            this.simulation.alphaTarget(0.0001);
+          }
+          d.fx = null;
+          d.fy = null;
+        },
+        nodeMouseOver(d) {
+          const graph = this.selections.graph;
+          const circle = graph.selectAll("circle");
+          const path = graph.selectAll("path");
+          const text = graph.selectAll("text");
+
+          const related = [];
+          const relatedLinks = [];
+          related.push(d);
+          this.simulation
+            .force("link")
+            .links()
+            .forEach((link) => {
+              if (link.source === d || link.target === d) {
+                relatedLinks.push(link);
+                if (related.indexOf(link.source) === -1) {
+                  related.push(link.source);
+                }
+                if (related.indexOf(link.target) === -1) {
+                  related.push(link.target);
+                }
+              }
+            });
+          circle.classed("faded", true);
+          circle
+            .filter((df) => related.indexOf(df) > -1)
+            .classed("highlight", true);
+          path.classed("faded", true);
+          path
+            .filter((df) => df.source === d || df.target === d)
+            .classed("highlight", true);
+          text.classed("faded", true);
+          text
+            .filter((df) => related.indexOf(df) > -1)
+            .classed("highlight", true);
+          // This ensures that tick is called so the node count is updated
+          this.simulation.alphaTarget(0.0001).restart();
+        },
+        nodeMouseOut(d) {
+          const graph = this.selections.graph;
+          const circle = graph.selectAll("circle");
+          const path = graph.selectAll("path");
+          const text = graph.selectAll("text");
+
+          circle.classed("faded", false);
+          circle.classed("highlight", false);
+          path.classed("faded", false);
+          path.classed("highlight", false);
+          text.classed("faded", false);
+          text.classed("highlight", false);
+          // This ensures that tick is called so the node count is updated
+          this.simulation.restart();
+        },
+        nodeClick(d) {
+          const circle = this.selections.graph.selectAll("circle");
+          circle.classed("selected", false);
+          circle.filter((td) => td === d).classed("selected", true);
+        },
+      },
+      watch: {
+        data: {
+          handler(newData) {
+            this.updateData();
+          },
+          deep: true,
+        },
+        forceProperties: {
+          handler(newForce) {
+            this.updateForces();
+          },
+          deep: true,
+        },
+      },
+    });
+
+    new Vue({
+      el: "#app",
+      data() {
+        return {
+          data: null,
+          jsondata: {
+            nodes: [
+              {
+                name: "Python을 활용하여 Web Data 수집하기",
+                class: "head",
+                system: "1",
+                nodeid: 60,
+              },
+              {
+                name: "정적 데이터 Crawling 실습",
+                class: "none",
+                system: "2",
+                nodeid: 61,
+              },
+              {
+                name: "Selenium을 활용한 동적 데이터 Crawling",
+                class: "none",
+                system: "3",
+                nodeid: 62,
+              },
+              {
+                name: "Xpath의 이해",
+                class: "none",
+                system: "4",
+                nodeid: 63,
+              },
+              {
+                name: "Scrapy를 활용하여 크롤링 하기",
+                class: "none",
+                system: "5",
+                nodeid: 64,
+              },
+              {
+                name: "Css 선택자의 이해",
+                class: "none",
+                system: "6",
+                nodeid: 65,
+              },
+              {
+                name: "Selenium 소개 및 환경 설정",
+                class: "none",
+                system: "7",
+                nodeid: 66,
+              },
+              {
+                name: "BS4를 활용하여 크롤링 하기",
+                class: "none",
+                system: "8",
+                nodeid: 67,
+              },
+              {
+                name: "Web Crawling 개념",
+                class: "none",
+                system: "9",
+                nodeid: 68,
+              },
+              {
+                name: "Python설치 및 환경 구축",
+                class: "none",
+                system: "10",
+                nodeid: 69,
+              },
+              {
+                name: "Python 입문자를위한 Python 기초",
+                class: "head",
+                system: "11",
+                nodeid: 80,
+              },
+              {
+                name: "Python 함수 연습문제",
+                class: "none",
+                system: "12",
+                nodeid: 81,
+              },
+              {
+                name: "문자열 생성",
+                class: "none",
+                system: "13",
+                nodeid: 82,
+              },
+              {
+                name: "Print() 로 출력해보기",
+                class: "none",
+                system: "14",
+                nodeid: 83,
+              },
+              {
+                name: "File 읽기/쓰기",
+                class: "none",
+                system: "15",
+                nodeid: 84,
+              },
+              {
+                name: "Boolean 타입(비교/논리 연산)",
+                class: "none",
+                system: "16",
+                nodeid: 85,
+              },
+              {
+                name: "이중 반복문",
+                class: "done",
+                system: "17",
+                nodeid: 86,
+              },
+              {
+                name: "Python 함수",
+                class: "ing",
+                system: "18",
+                nodeid: 87,
+              },
+              {
+                name: "입/출력 연습문제",
+                class: "none",
+                system: "19",
+                nodeid: 88,
+              },
+              {
+                name: "while 반복문",
+                class: "none",
+                system: "20",
+                nodeid: 89,
+              },
+              {
+                name: "for 반복문",
+                class: "none",
+                system: "21",
+                nodeid: 90,
+              },
+              {
+                name: "데이터 입력하기",
+                class: "none",
+                system: "22",
+                nodeid: 91,
+              },
+              {
+                name: "List/Tuple",
+                class: "none",
+                system: "23",
+                nodeid: 92,
+              },
+              {
+                name: "Dictionary/Set",
+                class: "none",
+                system: "24",
+                nodeid: 93,
+              },
+              {
+                name: "Python 기본문법",
+                class: "none",
+                system: "25",
+                nodeid: 94,
+              },
+              {
+                name: "Python 환경설정",
+                class: "none",
+                system: "26",
+                nodeid: 95,
+              },
+              {
+                name: "Python을 배워야하는 이유",
+                class: "none",
+                system: "27",
+                nodeid: 96,
+              },
+              {
+                name: "Python소개",
+                class: "none",
+                system: "28",
+                nodeid: 97,
+              },
+              {
+                name: "Python으로 코딩테스트 준비하기",
+                class: "head",
+                system: "29",
+                nodeid: 100,
+              },
+              {
+                name: "배열 연습문제",
+                class: "none",
+                system: "30",
+                nodeid: 101,
+              },
+              {
+                name: "구현 연습문제",
+                class: "none",
+                system: "31",
+                nodeid: 102,
+              },
+              {
+                name: "DFS/BFS 연습문제",
+                class: "none",
+                system: "32",
+                nodeid: 103,
+              },
+              {
+                name: "이진 탐색 연습문제",
+                class: "none",
+                system: "33",
+                nodeid: 104,
+              },
+              {
+                name: "최단경로 연습문제",
+                class: "none",
+                system: "34",
+                nodeid: 105,
+              },
+              {
+                name: "그리디 알고리즘",
+                class: "none",
+                system: "35",
+                nodeid: 106,
+              },
+              {
+                name: "DFS/BFS (넓이/깊이 우선탐색)",
+                class: "none",
+                system: "36",
+                nodeid: 107,
+              },
+              {
+                name: "정렬 연습문제",
+                class: "none",
+                system: "37",
+                nodeid: 108,
+              },
+              {
+                name: "최단경로 알고리즘",
+                class: "none",
+                system: "38",
+                nodeid: 109,
+              },
+              {
+                name: "그래프 이론",
+                class: "none",
+                system: "39",
+                nodeid: 110,
+              },
+              {
+                name: "정렬 알고리즘",
+                class: "none",
+                system: "40",
+                nodeid: 111,
+              },
+              {
+                name: "다이나믹 프로그래밍",
+                class: "none",
+                system: "41",
+                nodeid: 112,
+              },
+              {
+                name: "구현",
+                class: "none",
+                system: "42",
+                nodeid: 113,
+              },
+              {
+                name: "16-20년 코딩테스트 기출 분석",
+                class: "none",
+                system: "43",
+                nodeid: 114,
+              },
+              {
+                name: "코딩테스트 개요",
+                class: "none",
+                system: "44",
+                nodeid: 115,
+              },
+            ],
+            links: [
+              {
+                type: "links",
+                value: 1,
+                target: 0,
+                source: 1,
+              },
+              {
+                type: "links",
+                value: 1,
+                target: 0,
+                source: 2,
+              },
+              {
+                type: "links",
+                value: 1,
+                target: 1,
+                source: 3,
+              },
+              {
+                type: "links",
+                value: 1,
+                target: 1,
+                source: 4,
+              },
+              {
+                type: "links",
+                value: 1,
+                target: 3,
+                source: 5,
+              },
+              {
+                type: "links",
+                value: 1,
+                target: 2,
+                source: 6,
+              },
+              {
+                type: "links",
+                value: 1,
+                target: 4,
+                source: 7,
+              },
+              {
+                type: "links",
+                value: 1,
+                target: 5,
+                source: 8,
+              },
+              {
+                type: "links",
+                value: 1,
+                target: 6,
+                source: 8,
+              },
+              {
+                type: "links",
+                value: 1,
+                target: 7,
+                source: 8,
+              },
+              {
+                type: "links",
+                value: 1,
+                target: 8,
+                source: 9,
+              },
+              {
+                type: "links",
+                value: 1,
+                target: 10,
+                source: 11,
+              },
+              {
+                type: "links",
+                value: 1,
+                target: 10,
+                source: 12,
+              },
+              {
+                type: "links",
+                value: 1,
+                target: 10,
+                source: 13,
+              },
+              {
+                type: "links",
+                value: 1,
+                target: 10,
+                source: 14,
+              },
+              {
+                type: "links",
+                value: 1,
+                target: 10,
+                source: 15,
+              },
+              {
+                type: "links",
+                value: 1,
+                target: 10,
+                source: 16,
+              },
+              {
+                type: "links",
+                value: 1,
+                target: 11,
+                source: 17,
+              },
+              {
+                type: "links",
+                value: 1,
+                target: 14,
+                source: 18,
+              },
+              {
+                type: "links",
+                value: 1,
+                target: 16,
+                source: 19,
+              },
+              {
+                type: "links",
+                value: 1,
+                target: 16,
+                source: 20,
+              },
+              {
+                type: "links",
+                value: 1,
+                target: 18,
+                source: 21,
+              },
+              {
+                type: "links",
+                value: 1,
+                target: 19,
+                source: 22,
+              },
+              {
+                type: "links",
+                value: 1,
+                target: 20,
+                source: 22,
+              },
+              {
+                type: "links",
+                value: 1,
+                target: 10,
+                source: 23,
+              },
+              {
+                type: "links",
+                value: 1,
+                target: 12,
+                source: 24,
+              },
+              {
+                type: "links",
+                value: 1,
+                target: 13,
+                source: 24,
+              },
+              {
+                type: "links",
+                value: 1,
+                target: 15,
+                source: 24,
+              },
+              {
+                type: "links",
+                value: 1,
+                target: 17,
+                source: 24,
+              },
+              {
+                type: "links",
+                value: 1,
+                target: 21,
+                source: 24,
+              },
+              {
+                type: "links",
+                value: 1,
+                target: 22,
+                source: 24,
+              },
+              {
+                type: "links",
+                value: 1,
+                target: 23,
+                source: 24,
+              },
+              {
+                type: "links",
+                value: 1,
+                target: 24,
+                source: 25,
+              },
+              {
+                type: "links",
+                value: 1,
+                target: 24,
+                source: 26,
+              },
+              {
+                type: "links",
+                value: 1,
+                target: 25,
+                source: 27,
+              },
+              {
+                type: "links",
+                value: 1,
+                target: 26,
+                source: 27,
+              },
+              {
+                type: "links",
+                value: 1,
+                target: 28,
+                source: 29,
+              },
+              {
+                type: "links",
+                value: 1,
+                target: 28,
+                source: 30,
+              },
+              {
+                type: "links",
+                value: 1,
+                target: 28,
+                source: 31,
+              },
+              {
+                type: "links",
+                value: 1,
+                target: 28,
+                source: 32,
+              },
+              {
+                type: "links",
+                value: 1,
+                target: 28,
+                source: 33,
+              },
+              {
+                type: "links",
+                value: 1,
+                target: 30,
+                source: 34,
+              },
+              {
+                type: "links",
+                value: 1,
+                target: 31,
+                source: 35,
+              },
+              {
+                type: "links",
+                value: 1,
+                target: 32,
+                source: 36,
+              },
+              {
+                type: "links",
+                value: 1,
+                target: 33,
+                source: 37,
+              },
+              {
+                type: "links",
+                value: 1,
+                target: 35,
+                source: 38,
+              },
+              {
+                type: "links",
+                value: 1,
+                target: 36,
+                source: 39,
+              },
+              {
+                type: "links",
+                value: 1,
+                target: 37,
+                source: 40,
+              },
+              {
+                type: "links",
+                value: 1,
+                target: 29,
+                source: 41,
+              },
+              {
+                type: "links",
+                value: 1,
+                target: 34,
+                source: 41,
+              },
+              {
+                type: "links",
+                value: 1,
+                target: 38,
+                source: 41,
+              },
+              {
+                type: "links",
+                value: 1,
+                target: 39,
+                source: 41,
+              },
+              {
+                type: "links",
+                value: 1,
+                target: 40,
+                source: 41,
+              },
+              {
+                type: "links",
+                value: 1,
+                target: 41,
+                source: 42,
+              },
+              {
+                type: "links",
+                value: 1,
+                target: 42,
+                source: 43,
+              },
+            ],
+          },
+        };
+      },
+
+      methods: {
+        changeData() {
+          this.data = this.jsondata;
+        },
+      },
+    });
+  </script>
+  <style>
+    .faded {
+      opacity: 0.1;
+      transition: 0.3s opacity;
+    }
+    .highlight {
+      opacity: 1;
+    }
+
+    path.link {
+      fill: none;
+      stroke: #666;
+      stroke-width: 1.5px;
+    }
+    path.link.depends {
+      stroke: #005900;
+      stroke-dasharray: 5, 2;
+    }
+    path.link.needs {
+      stroke: #7f3f00;
+    }
+
+    circle.head {
+      fill: #ffff99;
+      stroke: #ffff99;
+      stroke-width: 1.5px;
+      r: 13;
+    }
+    circle.system {
+      fill: #cce5ff;
+      stroke: #003366;
+    }
+
+    circle.none {
+      fill: #4d11f0;
+      stroke: #4d11f0;
+      r: 10;
+    }
+
+    circle.done {
+      fill: #be1be3;
+      stroke: #be1be3;
+      r: 10;
+    }
+
+    circle.ing {
+      fill: #f0115c;
+      stroke: #f0115c;
+      r: 10;
+    }
+    circle.mount {
+      fill: #ffe5e5;
+      stroke: #660000;
+    }
+    circle.init {
+      fill: #b2e8b2;
+      stroke: #001900;
+    }
+
+    circle.selected {
+      stroke: #ff6666ff !important;
+      stroke-width: 3px;
+      animation: selected 2s infinite alternate ease-in-out;
+    }
+
+    @keyframes selected {
+      from {
+        stroke-width: 5px;
+        r: 26;
+      }
+      to {
+        stroke-width: 1px;
+        r: 30;
+      }
+    }
+
+    text {
+      font: 10px sans-serif;
+      pointer-events: none;
+      text-shadow: 0 1px 0 #fff, 1px 0 0 #fff, 0 -1px 0 #fff, -1px 0 0 #fff;
+    }
+
+    rect.caption {
+      fill: #ccccccac;
+      stroke: #666;
+      stroke-width: 1px;
+    }
+    text.caption {
+      font-size: 14px;
+      font-weight: bold;
+    }
+  </style>
+</body>

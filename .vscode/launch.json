@@ -1,0 +1,31 @@
+{
+  "configurations": [
+    {
+      "type": "java",
+      "name": "CodeLens (Launch) - JWT",
+      "request": "launch",
+      "mainClass": "com.web.blog.service.JWT",
+      "projectName": "webBlog"
+    },
+    {
+      "type": "java",
+      "name": "Spring Boot-WebBlogApplication<webBlog>",
+      "request": "launch",
+      "cwd": "${workspaceFolder}",
+      "console": "internalConsole",
+      "mainClass": "com.web.blog.WebBlogApplication",
+      "projectName": "webBlog",
+      "args": ""
+    },
+    {
+      "type": "java",
+      "name": "Spring Boot-MED<webBlog>",
+      "request": "launch",
+      "cwd": "${workspaceFolder}",
+      "console": "internalConsole",
+      "mainClass": "com.web.blog.service.MED",
+      "projectName": "webBlog",
+      "args": ""
+    }
+  ]
+}
